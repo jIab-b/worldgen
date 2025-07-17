@@ -1,0 +1,6 @@
+pydantic
+cupy
+numba
+fastapi
+uvicorn
+pytest 

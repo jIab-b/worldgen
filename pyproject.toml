@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "text-to-voxel"
+version = "0.1.0"
+description = "Text-to-voxel world generator MVP"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pydantic = "*"
+cupy = "*"
+numba = "*"
+fastapi = "*"
+uvicorn = "*"
+pytest = "*"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api" 
