@@ -1,0 +1,22 @@
+{
+    "configurations": [
+      {
+        "name": "Emscripten",
+        "compilerPath": "C:/Users/Beedf/emsdk/upstream/emscripten/emcc.bat",
+        "intelliSenseMode": "clang-x64",
+        "cppStandard": "c++17",
+        "includePath": [
+          "${workspaceFolder}/**",
+          "C:/Users/Beedf/emsdk/upstream/emscripten/system/include/**"
+        ],
+        "browse": {
+          "path": [
+            "${workspaceFolder}",
+            "C:/Users/Beedf/emsdk/upstream/emscripten/system/include/**"
+          ],
+          "limitSymbolsToIncludedHeaders": true
+        }
+      }
+    ],
+    "version": 4
+  }
