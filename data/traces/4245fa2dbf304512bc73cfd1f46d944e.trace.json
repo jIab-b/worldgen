@@ -1,0 +1,10 @@
+[
+  {
+    "fn": "build_chunks",
+    "args": {
+      "chunk_paths": [
+        "(WindowsPath('data/chunks/chunk_0_0.npy'), WindowsPath('data/chunks/chunk_0_0_color.npy'))"
+      ]
+    }
+  }
+]

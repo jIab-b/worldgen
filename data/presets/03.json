@@ -1,0 +1,35 @@
+{
+  "world_size": 256,
+  "sea_level": 62,
+  "macro_seed": 3,
+  "height_seed": 123,
+  "biomes": [
+    {
+      "id": "rainforest",
+      "band": "equator",
+      "width": 0.4,
+      "base": 70,
+      "amp": 30,
+      "freq": 0.02,
+      "color": [0, 150, 0]
+    },
+    {
+      "id": "grassland",
+      "band": "temperate",
+      "width": 0.4,
+      "base": 62,
+      "amp": 15,
+      "freq": 0.05,
+      "color": [100, 200, 100]
+    },
+    {
+      "id": "tundra",
+      "band": "polar",
+      "width": 0.2,
+      "base": 55,
+      "amp": 5,
+      "freq": 0.1,
+      "color": [200, 200, 255]
+    }
+  ]
+} 

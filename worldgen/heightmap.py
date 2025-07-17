@@ -51,5 +51,10 @@ class HeightField:
                 else:
                     noise = np.zeros_like(xs_slice)
 
+            # If noise has a .get() method (e.g. a CuPy array), call it to move data to CPU
+            get_func = getattr(noise, "get", None)
+            if callable(get_func):
+                noise = get_func()
+
             height[idx] = biome.base + (biome.amp * noise).astype(int)
         return height 

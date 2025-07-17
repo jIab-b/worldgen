@@ -1,0 +1,17 @@
+{
+  "world_size": 128,
+  "sea_level": 60,
+  "macro_seed": 1,
+  "height_seed": 1,
+  "biomes": [
+    {
+      "id": "plains",
+      "band": "temperate",
+      "width": 1.0,
+      "base": 60,
+      "amp": 0,
+      "freq": 0.1,
+      "color": [100, 200, 100]
+    }
+  ]
+} 

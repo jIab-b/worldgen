@@ -3,6 +3,7 @@ import numpy as np
 from numba import njit, prange
 import random
 
+@njit
 def _hash(seed: int, x: int, y: int) -> float:
     """Simple deterministic hash for noise grid."""
     h = seed ^ (x * 0x5DEECE66D + y * 0xBB67AE85)  # LCG-inspired
@@ -28,7 +29,8 @@ def value_noise2D(seed: int, xs: cp.ndarray, zs: cp.ndarray) -> cp.ndarray:
 
 def fbm_2D(seed: int, xs: cp.ndarray, zs: cp.ndarray, freq: float, octaves: int = 5) -> cp.ndarray:
     """Fractional Brownian motion by summing octaves."""
-    noise = cp.zeros_like(xs)
+    # Initialize as float to accumulate fractional noise without casting errors
+    noise = cp.zeros_like(xs, dtype=cp.float64)
     amp = 1.0
     for o in range(octaves):
         noise += amp * value_noise2D(seed + o, xs * freq, zs * freq)
@@ -36,10 +38,9 @@ def fbm_2D(seed: int, xs: cp.ndarray, zs: cp.ndarray, freq: float, octaves: int 
         amp *= 0.5
     return noise / (2 - 1 / (1 << (octaves - 1)))  # Normalize
 
-@njit(parallel=True)
 def value_noise2D_cpu(seed: int, xs: np.ndarray, zs: np.ndarray) -> np.ndarray:
-    """CPU fallback."""
-    result = np.zeros_like(xs)
+    """CPU fallback implementation of value noise."""
+    result = np.zeros_like(xs, dtype=float)
     for i in prange(xs.size):
         x, z = xs.flat[i], zs.flat[i]
         x_floor, z_floor = int(x), int(z)
@@ -55,9 +56,8 @@ def value_noise2D_cpu(seed: int, xs: np.ndarray, zs: np.ndarray) -> np.ndarray:
         result.flat[i] = top + z_frac * (bottom - top)
     return result
 
-@njit(parallel=True)
 def fbm_2D_cpu(seed: int, xs: np.ndarray, zs: np.ndarray, freq: float, octaves: int) -> np.ndarray:
-    noise = np.zeros_like(xs)
+    noise = np.zeros_like(xs, dtype=float)
     amp = 1.0
     current_freq = freq
     for o in range(octaves):
