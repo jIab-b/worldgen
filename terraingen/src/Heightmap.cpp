@@ -3,6 +3,10 @@
 #include "Random.hpp"
 #ifdef __EMSCRIPTEN__
 #include <webgpu/webgpu.h>
+#include <emscripten.h>
+#include <fstream>
+#include <iterator>
+#include <string>
 #endif
 
 namespace terraingen {
@@ -26,29 +30,21 @@ GPUTexture Heightmap::Generate(const ChunkID& id, GPUContext& gpu) {
         static WGPUComputePipeline pipeline = nullptr;
         if (!pipeline) {
             device = emscripten_webgpu_get_device();
-            const char* shaderSrc = R"(
-@group(0) @binding(0) var outputTex : texture_storage_2d<r32float, write>;
-
-@compute @workgroup_size(8,8)
-fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-  let dims : vec2<u32> = textureDimensions(outputTex);
-  if (gid.x >= dims.x || gid.y >= dims.y) {
-    return;
-  }
-  let x : f32 = f32(gid.x);
-  let y : f32 = f32(gid.y);
-  let v : f32 = fract(sin((x*12.9898 + y*78.233))*43758.5453);
-  textureStore(outputTex, vec2<i32>(gid.xy), vec4<f32>(v, 0.0, 0.0, 0.0));
-}
-)";
+            // Load noise WGSL from external file
+            std::ifstream file("terraingen/shaders/heightmap_noise.wgsl");
+            std::string src((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            if (!file) {
+                // failed to load shader, fallback to CPU path
+            }
+            const char* shaderSrc = src.c_str();
 
             WGPUShaderModuleWGSLDescriptor wgslDesc{};
             wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor;
             wgslDesc.code = shaderSrc;
 
             WGPUShaderModuleDescriptor smDesc{};
-            smDesc.nextInChain = &wgslDesc.chain;
-            smDesc.label = "heightmap shader";
+            smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslDesc);
+            smDesc.label = "heightmap_noise";
 
             WGPUShaderModule module = wgpuDeviceCreateShaderModule(device, &smDesc);
 
@@ -92,7 +88,86 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
         wgpuCommandBufferRelease(cb);
         wgpuCommandEncoderRelease(enc);
 
-        return texID;
+        // --- GPU Erosion Passes ---
+        // define cache for both erosion shaders
+        struct ErosionCache { WGPUShaderModule module; WGPUBindGroupLayout bgl; WGPUPipelineLayout pl; WGPUComputePipeline pipeline; };
+        static ErosionCache hydroCache{};
+        static ErosionCache thermoCache{};
+        // Hydraulic erosion pass
+        GPUTexture hydroTexID = gpu.CreateTexture2D(kSize, kSize);
+        auto& hydroTex = gpu.GetTexture(hydroTexID);
+        {
+            if (!hydroCache.pipeline) {
+                std::ifstream efile("terraingen/shaders/hydraulic_erosion.wgsl");
+                std::string src((std::istreambuf_iterator<char>(efile)), std::istreambuf_iterator<char>());
+                WGPUShaderModuleWGSLDescriptor wgslDesc{}; wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor; wgslDesc.code = src.c_str();
+                WGPUShaderModuleDescriptor smDesc{}; smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslDesc);
+                hydroCache.module = wgpuDeviceCreateShaderModule(device, &smDesc);
+                WGPUBindGroupLayoutEntry entries[2]{};
+                entries[0].binding = 0; entries[0].visibility = WGPUShaderStage_Compute; entries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat; entries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+                entries[1].binding = 1; entries[1].visibility = WGPUShaderStage_Compute; entries[1].storageTexture.access = WGPUStorageTextureAccess_WriteOnly; entries[1].storageTexture.format = WGPUTextureFormat_R32Float; entries[1].storageTexture.viewDimension = WGPUTextureViewDimension_2D;
+                WGPUBindGroupLayoutDescriptor bglDesc{}; bglDesc.entryCount = 2; bglDesc.entries = entries;
+                hydroCache.bgl = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+                WGPUPipelineLayoutDescriptor plDesc{}; plDesc.bindGroupLayoutCount = 1; plDesc.bindGroupLayouts = &hydroCache.bgl;
+                hydroCache.pl = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+                WGPUComputePipelineDescriptor cpDesc{}; cpDesc.layout = hydroCache.pl; cpDesc.compute.module = hydroCache.module; cpDesc.compute.entryPoint = "main";
+                hydroCache.pipeline = wgpuDeviceCreateComputePipeline(device, &cpDesc);
+            }
+            WGPUBindGroupEntry bge[2]{};
+            bge[0].binding = 0; bge[0].textureView = texInfo.gpuView;
+            bge[1].binding = 1; bge[1].textureView = hydroTex.gpuView;
+            WGPUBindGroupDescriptor bgd{}; bgd.layout = hydroCache.bgl; bgd.entryCount = 2; bgd.entries = bge;
+            WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgd);
+            WGPUCommandEncoder enc2 = wgpuDeviceCreateCommandEncoder(device, nullptr);
+            WGPUComputePassEncoder pass2 = wgpuCommandEncoderBeginComputePass(enc2, nullptr);
+            wgpuComputePassEncoderSetPipeline(pass2, hydroCache.pipeline);
+            wgpuComputePassEncoderSetBindGroup(pass2, 0, bg, 0, nullptr);
+            wgpuComputePassEncoderDispatchWorkgroups(pass2, (kSize + 7)/8, (kSize + 7)/8, 1);
+            wgpuComputePassEncoderEnd(pass2);
+            WGPUCommandBuffer cb2 = wgpuCommandEncoderFinish(enc2, nullptr);
+            wgpuQueueSubmit(gpu.Queue(), 1, &cb2);
+            wgpuBindGroupRelease(bg);
+            wgpuCommandEncoderRelease(enc2);
+            wgpuCommandBufferRelease(cb2);
+        }
+        // Thermal erosion pass
+        GPUTexture thermTexID = gpu.CreateTexture2D(kSize, kSize);
+        auto& thermTex = gpu.GetTexture(thermTexID);
+        {
+            if (!thermoCache.pipeline) {
+                std::ifstream efile("terraingen/shaders/thermal_erosion.wgsl");
+                std::string src((std::istreambuf_iterator<char>(efile)), std::istreambuf_iterator<char>());
+                WGPUShaderModuleWGSLDescriptor wgslDesc{}; wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor; wgslDesc.code = src.c_str();
+                WGPUShaderModuleDescriptor smDesc{}; smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslDesc);
+                thermoCache.module = wgpuDeviceCreateShaderModule(device, &smDesc);
+                WGPUBindGroupLayoutEntry entries[2]{};
+                entries[0].binding = 0; entries[0].visibility = WGPUShaderStage_Compute; entries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat; entries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+                entries[1].binding = 1; entries[1].visibility = WGPUShaderStage_Compute; entries[1].storageTexture.access = WGPUStorageTextureAccess_WriteOnly; entries[1].storageTexture.format = WGPUTextureFormat_R32Float; entries[1].storageTexture.viewDimension = WGPUTextureViewDimension_2D;
+                WGPUBindGroupLayoutDescriptor bglDesc{}; bglDesc.entryCount = 2; bglDesc.entries = entries;
+                thermoCache.bgl = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+                WGPUPipelineLayoutDescriptor plDesc{}; plDesc.bindGroupLayoutCount = 1; plDesc.bindGroupLayouts = &thermoCache.bgl;
+                thermoCache.pl = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+                WGPUComputePipelineDescriptor cpDesc{}; cpDesc.layout = thermoCache.pl; cpDesc.compute.module = thermoCache.module; cpDesc.compute.entryPoint = "main";
+                thermoCache.pipeline = wgpuDeviceCreateComputePipeline(device, &cpDesc);
+            }
+            WGPUBindGroupEntry bge[2]{};
+            bge[0].binding = 0; bge[0].textureView = hydroTex.gpuView;
+            bge[1].binding = 1; bge[1].textureView = thermTex.gpuView;
+            WGPUBindGroupDescriptor bgd{}; bgd.layout = thermoCache.bgl; bgd.entryCount = 2; bgd.entries = bge;
+            WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgd);
+            WGPUCommandEncoder enc3 = wgpuDeviceCreateCommandEncoder(device, nullptr);
+            WGPUComputePassEncoder pass3 = wgpuCommandEncoderBeginComputePass(enc3, nullptr);
+            wgpuComputePassEncoderSetPipeline(pass3, thermoCache.pipeline);
+            wgpuComputePassEncoderSetBindGroup(pass3, 0, bg, 0, nullptr);
+            wgpuComputePassEncoderDispatchWorkgroups(pass3, (kSize + 7)/8, (kSize + 7)/8, 1);
+            wgpuComputePassEncoderEnd(pass3);
+            WGPUCommandBuffer cb3 = wgpuCommandEncoderFinish(enc3, nullptr);
+            wgpuQueueSubmit(gpu.Queue(), 1, &cb3);
+            wgpuBindGroupRelease(bg);
+            wgpuCommandEncoderRelease(enc3);
+            wgpuCommandBufferRelease(cb3);
+        }
+        return thermTexID;
     }
 #endif
 
