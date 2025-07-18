@@ -1,12 +1,66 @@
 #include "MeshTiler.hpp"
 #include "GPUContext.hpp"
 #include <cmath>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5_webgpu.h>
+#include <emscripten.h>
+#include <fstream>
+#include <iterator>
+#include <string>
+#endif
 
 namespace terraingen {
 
 MeshData MeshTiler::Generate(const GPUTexture heightTex,
                              const GPUTexture /*sdfTex*/,
                              GPUContext& gpu) {
+    // GPU stub dispatch for mesh tiler
+    #ifdef __EMSCRIPTEN__
+    if (gpu.HasDevice()) {
+        auto device = emscripten_webgpu_get_device();
+        const auto& tex = gpu.GetTexture(heightTex);
+        uint32_t w = tex.width;
+        uint32_t h = tex.height;
+        // Compile and cache compute pipeline
+        struct PipelineCache { WGPUShaderModule module; WGPUBindGroupLayout bgl; WGPUPipelineLayout pl; WGPUComputePipeline pipeline; };
+        static PipelineCache cache{};
+        if (!cache.pipeline) {
+            std::ifstream file("terraingen/shaders/meshtiler.wgsl");
+            std::string src((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            WGPUShaderModuleWGSLDescriptor wgslDesc{}; wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor; wgslDesc.code = src.c_str();
+            WGPUShaderModuleDescriptor smDesc{}; smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslDesc);
+            cache.module = wgpuDeviceCreateShaderModule(device, &smDesc);
+            WGPUBindGroupLayoutEntry entry{};
+            entry.binding = 0;
+            entry.visibility = WGPUShaderStage_Compute;
+            entry.texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+            entry.texture.viewDimension = WGPUTextureViewDimension_2D;
+            WGPUBindGroupLayoutDescriptor bglDesc{}; bglDesc.entryCount = 1; bglDesc.entries = &entry;
+            cache.bgl = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+            WGPUPipelineLayoutDescriptor plDesc{}; plDesc.bindGroupLayoutCount = 1; plDesc.bindGroupLayouts = &cache.bgl;
+            cache.pl = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+            WGPUComputePipelineDescriptor cpDesc{}; cpDesc.layout = cache.pl; cpDesc.compute.module = cache.module; cpDesc.compute.entryPoint = "main";
+            cache.pipeline = wgpuDeviceCreateComputePipeline(device, &cpDesc);
+        }
+        // Dispatch compute shader
+        WGPUBindGroupEntry bgEntry{}; bgEntry.binding = 0; bgEntry.textureView = gpu.GetTexture(heightTex).gpuView;
+        WGPUBindGroupDescriptor bgDesc{}; bgDesc.layout = cache.bgl; bgDesc.entryCount = 1; bgDesc.entries = &bgEntry;
+        WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+        WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, nullptr);
+        WGPUComputePassDescriptor passDesc{};
+        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(enc, &passDesc);
+        wgpuComputePassEncoderSetPipeline(pass, cache.pipeline);
+        wgpuComputePassEncoderSetBindGroup(pass, 0, bindGroup, 0, nullptr);
+        wgpuComputePassEncoderDispatchWorkgroups(pass, (w + 7)/8, (h + 7)/8, 1);
+        wgpuComputePassEncoderEnd(pass);
+        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
+        wgpuQueueSubmit(gpu.Queue(), 1, &cmd);
+        // Cleanup
+        wgpuBindGroupRelease(bindGroup);
+        wgpuCommandEncoderRelease(enc);
+        wgpuCommandBufferRelease(cmd);
+    }
+    #endif
     const auto& tex = gpu.GetTexture(heightTex);
     const uint32_t w = tex.width;
     const uint32_t h = tex.height;

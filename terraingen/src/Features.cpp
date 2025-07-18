@@ -4,6 +4,13 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5_webgpu.h>
+#include <emscripten.h>
+#include <fstream>
+#include <iterator>
+#include <string>
+#endif
 
 namespace terraingen {
 
@@ -26,6 +33,56 @@ void FeatureRegistry::ApplyAll(ChunkCtx& ctx) {
 class SimpleCaves : public IFeature {
 public:
     void Apply(ChunkCtx& ctx) override {
+        // GPU path for cave SDF
+#ifdef __EMSCRIPTEN__
+        if (ctx.gpu->HasDevice()) {
+            // Ensure SDF texture exists
+            if (ctx.sdfTexture == 0) {
+                const auto& ht = ctx.gpu->GetTexture(ctx.heightTexture);
+                ctx.sdfTexture = ctx.gpu->CreateTexture2D(ht.width, ht.height);
+            }
+            // Compile & cache compute pipeline
+            static struct { WGPUShaderModule module; WGPUBindGroupLayout bgl; WGPUPipelineLayout pl; WGPUComputePipeline pipeline; } cache;
+            auto device = emscripten_webgpu_get_device();
+            if (!cache.pipeline) {
+                std::ifstream file("terraingen/shaders/caves.wgsl");
+                std::string src((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                WGPUShaderModuleWGSLDescriptor wgslDesc{}; wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor; wgslDesc.code = src.c_str();
+                WGPUShaderModuleDescriptor smDesc{}; smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslDesc);
+                cache.module = wgpuDeviceCreateShaderModule(device, &smDesc);
+                WGPUBindGroupLayoutEntry entries[2]{};
+                entries[0].binding = 0; entries[0].visibility = WGPUShaderStage_Compute; entries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat; entries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+                entries[1].binding = 1; entries[1].visibility = WGPUShaderStage_Compute; entries[1].storageTexture.access = WGPUStorageTextureAccess_WriteOnly; entries[1].storageTexture.format = WGPUTextureFormat_R32Float; entries[1].storageTexture.viewDimension = WGPUTextureViewDimension_2D;
+                WGPUBindGroupLayoutDescriptor bglDesc{}; bglDesc.entryCount = 2; bglDesc.entries = entries;
+                cache.bgl = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+                WGPUPipelineLayoutDescriptor plDesc{}; plDesc.bindGroupLayoutCount = 1; plDesc.bindGroupLayouts = &cache.bgl;
+                cache.pl = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+                WGPUComputePipelineDescriptor cpDesc{}; cpDesc.layout = cache.pl; cpDesc.compute.module = cache.module; cpDesc.compute.entryPoint = "main";
+                cache.pipeline = wgpuDeviceCreateComputePipeline(device, &cpDesc);
+            }
+            // Dispatch shader
+            const auto& sdf = ctx.gpu->GetTexture(ctx.sdfTexture);
+            uint32_t w = sdf.width, h = sdf.height;
+            WGPUBindGroupEntry bgEntries[2]{};
+            bgEntries[0].binding = 0; bgEntries[0].textureView = ctx.gpu->GetTexture(ctx.heightTexture).gpuView;
+            bgEntries[1].binding = 1; bgEntries[1].textureView = sdf.gpuView;
+            WGPUBindGroupDescriptor bgd{}; bgd.layout = cache.bgl; bgd.entryCount = 2; bgd.entries = bgEntries;
+            WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgd);
+            WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, nullptr);
+            WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(enc, nullptr);
+            wgpuComputePassEncoderSetPipeline(pass, cache.pipeline);
+            wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
+            wgpuComputePassEncoderDispatchWorkgroups(pass, (w+7)/8, (h+7)/8, 1);
+            wgpuComputePassEncoderEnd(pass);
+            WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
+            wgpuQueueSubmit(ctx.gpu->Queue(), 1, &cmd);
+            // Cleanup
+            wgpuBindGroupRelease(bg);
+            wgpuCommandEncoderRelease(enc);
+            wgpuCommandBufferRelease(cmd);
+            return;
+        }
+#endif
         // Create SDF texture same resolution as heightmap if not yet
         if (ctx.sdfTexture == 0) {
             const auto& heightTex = ctx.gpu->GetTexture(ctx.heightTexture);
