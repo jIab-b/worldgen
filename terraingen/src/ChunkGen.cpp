@@ -26,8 +26,7 @@ namespace terraingen {
 // Biomes implementation moved to Biomes.cpp
 
 // Features
-void FeatureRegistry::Add(IFeature* feature) {}
-void FeatureRegistry::ApplyAll(ChunkCtx& ctx) {}
+// FeatureRegistry implementation moved to Features.cpp
 
 // TextureSynth implementation moved to TextureSynth.cpp
 
