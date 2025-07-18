@@ -22,6 +22,7 @@ def main():
         '--closure', '1',
         '-s', 'WASM=1',
         '-s', 'ALLOW_MEMORY_GROWTH=1',
+        '-s', 'USE_WEBGPU=1',
         '-s', 'EXPORTED_FUNCTIONS=["_GenerateChunk"]',
         '-s', 'EXPORTED_RUNTIME_METHODS=["cwrap","getValue"]'
     ]
