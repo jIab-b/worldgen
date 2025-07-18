@@ -22,6 +22,7 @@ public:
         uint32_t width = 0;
         uint32_t height = 0;
         std::vector<float> data; // CPU mirror used only for fallback/debug
+        std::vector<uint8_t> dataU8; // for R8 textures
 #ifdef __EMSCRIPTEN__
         WGPUTexture gpuTex = nullptr;
         WGPUTextureView gpuView = nullptr;
@@ -38,6 +39,9 @@ public:
 
     // Create a 2-D float texture and return its ID
     TextureID CreateTexture2D(uint32_t width, uint32_t height);
+
+    // Create a single-channel R8Uint texture (biome map)
+    TextureID CreateTexture2D_U8(uint32_t width, uint32_t height);
 
     // Access texture by ID (mutable)
     Texture& GetTexture(TextureID id);
