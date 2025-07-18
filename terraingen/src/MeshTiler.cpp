@@ -12,16 +12,16 @@
 namespace terraingen {
 
 MeshData MeshTiler::Generate(const GPUTexture heightTex,
-                             const GPUTexture /*sdfTex*/,
+                             const GPUTexture sdfTex,
                              GPUContext& gpu) {
-    // GPU stub dispatch for mesh tiler
+    MeshData mesh;
+    // GPU path: generate grid mesh on GPU into a vertex buffer
     #ifdef __EMSCRIPTEN__
     if (gpu.HasDevice()) {
         auto device = emscripten_webgpu_get_device();
-        const auto& tex = gpu.GetTexture(heightTex);
-        uint32_t w = tex.width;
-        uint32_t h = tex.height;
-        // Compile and cache compute pipeline
+        const auto& ht = gpu.GetTexture(heightTex);
+        uint32_t w = ht.width, h = ht.height;
+        // Compile & cache the compute pipeline
         struct PipelineCache { WGPUShaderModule module; WGPUBindGroupLayout bgl; WGPUPipelineLayout pl; WGPUComputePipeline pipeline; };
         static PipelineCache cache{};
         if (!cache.pipeline) {
@@ -30,42 +30,99 @@ MeshData MeshTiler::Generate(const GPUTexture heightTex,
             WGPUShaderModuleWGSLDescriptor wgslDesc{}; wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor; wgslDesc.code = src.c_str();
             WGPUShaderModuleDescriptor smDesc{}; smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslDesc);
             cache.module = wgpuDeviceCreateShaderModule(device, &smDesc);
-            WGPUBindGroupLayoutEntry entry{};
-            entry.binding = 0;
-            entry.visibility = WGPUShaderStage_Compute;
-            entry.texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
-            entry.texture.viewDimension = WGPUTextureViewDimension_2D;
-            WGPUBindGroupLayoutDescriptor bglDesc{}; bglDesc.entryCount = 1; bglDesc.entries = &entry;
+            // Bind height texture + vertex storage buffer
+            WGPUBindGroupLayoutEntry entries[2] = {};
+            entries[0].binding = 0; entries[0].visibility = WGPUShaderStage_Compute;
+            entries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+            entries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+            entries[1].binding = 1; entries[1].visibility = WGPUShaderStage_Compute;
+            entries[1].buffer.type = WGPUBufferBindingType_Storage;
+            entries[1].buffer.minBindingSize = static_cast<uint64_t>(w) * h * sizeof(float) * 8;
+            WGPUBindGroupLayoutDescriptor bglDesc{}; bglDesc.entryCount = 2; bglDesc.entries = entries;
             cache.bgl = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
             WGPUPipelineLayoutDescriptor plDesc{}; plDesc.bindGroupLayoutCount = 1; plDesc.bindGroupLayouts = &cache.bgl;
             cache.pl = wgpuDeviceCreatePipelineLayout(device, &plDesc);
             WGPUComputePipelineDescriptor cpDesc{}; cpDesc.layout = cache.pl; cpDesc.compute.module = cache.module; cpDesc.compute.entryPoint = "main";
             cache.pipeline = wgpuDeviceCreateComputePipeline(device, &cpDesc);
         }
-        // Dispatch compute shader
-        WGPUBindGroupEntry bgEntry{}; bgEntry.binding = 0; bgEntry.textureView = gpu.GetTexture(heightTex).gpuView;
-        WGPUBindGroupDescriptor bgDesc{}; bgDesc.layout = cache.bgl; bgDesc.entryCount = 1; bgDesc.entries = &bgEntry;
+        // Allocate GPU buffers
+        struct Vertex { float x,y,z,nx,ny,nz,u,v; };
+        size_t vertexCount = size_t(w) * h;
+        size_t vbufSize = vertexCount * sizeof(Vertex);
+        WGPUBufferDescriptor vbDesc{};
+        vbDesc.size = vbufSize;
+        vbDesc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc;
+        WGPUBuffer vbuf = wgpuDeviceCreateBuffer(device, &vbDesc);
+        // Bind group: height texture + vertex buffer
+        WGPUBindGroupEntry bgE[2] = {};
+        bgE[0].binding = 0; bgE[0].textureView = ht.gpuView;
+        bgE[1].binding = 1; bgE[1].buffer = vbuf;
+        WGPUBindGroupDescriptor bgDesc{}; bgDesc.layout = cache.bgl; bgDesc.entryCount = 2; bgDesc.entries = bgE;
         WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+        // Dispatch
         WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device, nullptr);
-        WGPUComputePassDescriptor passDesc{};
-        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(enc, &passDesc);
+        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(enc, nullptr);
         wgpuComputePassEncoderSetPipeline(pass, cache.pipeline);
         wgpuComputePassEncoderSetBindGroup(pass, 0, bindGroup, 0, nullptr);
         wgpuComputePassEncoderDispatchWorkgroups(pass, (w + 7)/8, (h + 7)/8, 1);
         wgpuComputePassEncoderEnd(pass);
         WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, nullptr);
         wgpuQueueSubmit(gpu.Queue(), 1, &cmd);
-        // Cleanup
+        // Read back vertex data
+        WGPUBufferDescriptor readDesc{};
+        readDesc.size = vbufSize;
+        readDesc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+        WGPUBuffer readBuf = wgpuDeviceCreateBuffer(device, &readDesc);
+        WGPUCommandEncoder enc2 = wgpuDeviceCreateCommandEncoder(device, nullptr);
+        wgpuCommandEncoderCopyBufferToBuffer(enc2, vbuf, 0, readBuf, 0, vbufSize);
+        WGPUCommandBuffer copyCmd = wgpuCommandEncoderFinish(enc2, nullptr);
+        wgpuQueueSubmit(gpu.Queue(), 1, &copyCmd);
+        // Map and transfer
+        struct UD{bool done;}; UD ud{false};
+        wgpuBufferMapAsync(readBuf, WGPUMapMode_Read, 0, vbufSize,
+            [](WGPUBufferMapAsyncStatus, void* usr){((UD*)usr)->done = true;}, &ud);
+        while(!ud.done) { emscripten_sleep(0); }
+        const Vertex* src = (const Vertex*)wgpuBufferGetMappedRange(readBuf, 0, vbufSize);
+        mesh.vertices.reserve(vertexCount * 8);
+        for(size_t i=0;i<vertexCount;i++){
+            mesh.vertices.push_back(src[i].x);
+            mesh.vertices.push_back(src[i].y);
+            mesh.vertices.push_back(src[i].z);
+            mesh.vertices.push_back(src[i].nx);
+            mesh.vertices.push_back(src[i].ny);
+            mesh.vertices.push_back(src[i].nz);
+            mesh.vertices.push_back(src[i].u);
+            mesh.vertices.push_back(src[i].v);
+        }
+        wgpuBufferUnmap(readBuf);
+        // Release GPU objects
         wgpuBindGroupRelease(bindGroup);
         wgpuCommandEncoderRelease(enc);
         wgpuCommandBufferRelease(cmd);
+        wgpuCommandEncoderRelease(enc2);
+        wgpuCommandBufferRelease(copyCmd);
+        wgpuBufferRelease(vbuf);
+        wgpuBufferRelease(readBuf);
+        // CPU fallback for indices
+        mesh.indices.reserve((w-1)*(h-1)*6);
+        for(uint32_t y=0;y<h-1;++y){
+            for(uint32_t x=0;x<w-1;++x){
+                uint32_t i0=y*w+x, i1=y*w+(x+1), i2=(y+1)*w+x, i3=(y+1)*w+(x+1);
+                mesh.indices.push_back(i0);
+                mesh.indices.push_back(i2);
+                mesh.indices.push_back(i1);
+                mesh.indices.push_back(i1);
+                mesh.indices.push_back(i2);
+                mesh.indices.push_back(i3);
+            }
+        }
+        return mesh;
     }
     #endif
     const auto& tex = gpu.GetTexture(heightTex);
     const uint32_t w = tex.width;
     const uint32_t h = tex.height;
 
-    MeshData mesh;
     mesh.vertices.reserve(static_cast<size_t>(w) * h * 8); // 8 floats per vert
     mesh.indices.reserve(static_cast<size_t>(w - 1) * (h - 1) * 6);
 
