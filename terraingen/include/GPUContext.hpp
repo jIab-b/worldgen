@@ -24,6 +24,8 @@ public:
     // Access texture by ID (mutable)
     Texture& GetTexture(TextureID id);
 
+    const Texture& GetTexture(TextureID id) const { return textures_.at(id); }
+
 private:
     std::vector<Texture> textures_;
 };

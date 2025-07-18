@@ -23,34 +23,15 @@ namespace terraingen {
 // void PCG64Jump(PCG64State& s) {...}
 // uint64_t HashCoords(...) {...}
 
-// Biomes
-BiomeMap Biomes::Classify(const GPUTexture heightTex, GPUContext& gpu) {
-    return {};
-}
-GPUTexture Biomes::GenerateParameters(const BiomeMap& map, GPUContext& gpu) {
-    return 0;
-}
+// Biomes implementation moved to Biomes.cpp
 
 // Features
 void FeatureRegistry::Add(IFeature* feature) {}
 void FeatureRegistry::ApplyAll(ChunkCtx& ctx) {}
 
-// TextureSynth
-void TextureSynth::Generate(const GPUTexture heightTex,
-                             const BiomeMap& biomeMap,
-                             GPUContext& gpu,
-                             GPUTexture& outAlbedo,
-                             GPUTexture& outNormal,
-                             GPUTexture& outRoughness) {
-    outAlbedo = outNormal = outRoughness = 0;
-}
+// TextureSynth implementation moved to TextureSynth.cpp
 
-// MeshTiler
-MeshData MeshTiler::Generate(const GPUTexture heightTex,
-                              const GPUTexture sdfTex,
-                              GPUContext& gpu) {
-    return {};
-}
+// MeshTiler implementation moved to MeshTiler.cpp
 
 // IO implementations moved to IO.cpp
 // std::vector<uint8_t> LoadBinary(...)
