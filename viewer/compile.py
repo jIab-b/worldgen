@@ -41,6 +41,8 @@ def build_command(emcc: str, src: Path, dst: Path, libs_dir: Path) -> list[str]:
         "-s", "USE_GLFW=3",       # raylib's window/input backend
         "-s", "ASYNCIFY",         # allow blocking I/O (e.g. fetch)
         "-s", "WASM=1",           # generate .wasm
+        # Embed the chunks directory so it’s available in the virtual filesystem
+        "--embed-file", "chunks",
     ]
 
 
