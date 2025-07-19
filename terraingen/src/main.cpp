@@ -61,6 +61,43 @@ int GenerateChunkCLI(int cx, int cz, const std::string& outDir) {
         return 1;
     }
     std::cout << "Chunk generation complete: " << vPath << " and " << iPath << std::endl;
+    // 7. Save heightmap (float32)
+    {
+        auto& hinfo = gpu.GetTexture(heightTex);
+        std::vector<uint8_t> heightBytes(
+            reinterpret_cast<uint8_t*>(hinfo.data.data()),
+            reinterpret_cast<uint8_t*>(hinfo.data.data()) + hinfo.data.size() * sizeof(float)
+        );
+        std::string hPath = outDir + "/chunk_" + std::to_string(cx) + "_" + std::to_string(cz) + "_heightmap.raw";
+        if (!SaveBinary(hPath, heightBytes)) {
+            std::cerr << "Error writing heightmap " << hPath << std::endl;
+            return 1;
+        }
+    }
+    // 8. Save biome parameters (uint8_t)
+    {
+        auto& pinfo = gpu.GetTexture(paramTex);
+        const std::vector<uint8_t>& paramBytes = pinfo.dataU8;
+        std::string pPath = outDir + "/chunk_" + std::to_string(cx) + "_" + std::to_string(cz) + "_biomeparams.raw";
+        if (!SaveBinary(pPath, paramBytes)) {
+            std::cerr << "Error writing biome params " << pPath << std::endl;
+            return 1;
+        }
+    }
+    // 9. Save SDF (float32) if generated
+    if (ctx.sdfTexture != 0) {
+        auto& sdfinfo = gpu.GetTexture(ctx.sdfTexture);
+        std::vector<uint8_t> sdfBytes(
+            reinterpret_cast<uint8_t*>(sdfinfo.data.data()),
+            reinterpret_cast<uint8_t*>(sdfinfo.data.data()) + sdfinfo.data.size() * sizeof(float)
+        );
+        std::string sPath = outDir + "/chunk_" + std::to_string(cx) + "_" + std::to_string(cz) + "_sdf.raw";
+        if (!SaveBinary(sPath, sdfBytes)) {
+            std::cerr << "Error writing SDF " << sPath << std::endl;
+            return 1;
+        }
+    }
+    std::cout << "Heightmap, biome params, and SDF saved to " << outDir << std::endl;
     return 0;
 }
 
@@ -74,7 +111,8 @@ int main(int argc, char** argv) {
     }
     int cx = std::stoi(argv[1]);
     int cz = std::stoi(argv[2]);
-    std::string outDir = "chunks";
+    // Default output directory now points at the viewer's chunks folder
+    std::string outDir = "../viewer/chunks";
     if (argc >= 5 && std::string(argv[3]) == "--outdir") {
         outDir = argv[4];
     }

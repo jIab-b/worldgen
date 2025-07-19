@@ -2,6 +2,13 @@
 #include "raymath.h"
 #include <stdlib.h>
 #include <stdio.h>
+// Fallback chunk coordinates if not provided at compile time
+#ifndef INIT_CX
+#define INIT_CX 0
+#endif
+#ifndef INIT_CZ
+#define INIT_CZ 0
+#endif
 
 //------------------------------------------------------------------------------------
 // Program main entry point
@@ -83,8 +90,8 @@ int main(void)
     Material material = LoadMaterialDefault();
     //--------------------------------------------------------------------------------------
 
-    // Load initial mesh chunk at (0,0)
-    loadChunkMesh(0, 0);
+    // Load initial mesh chunk at (INIT_CX, INIT_CZ)
+    loadChunkMesh(INIT_CX, INIT_CZ);
 
     // Main loop
     while (!WindowShouldClose())

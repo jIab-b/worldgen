@@ -55,9 +55,16 @@ def main() -> None:
     )
     parser.add_argument("source", help="Path to the .c file to compile")
     parser.add_argument(
-        "-o",
-        "--output",
+        "-o", "--output",
         help="Output file (.html).  Defaults to <source>.html",
+    )
+    parser.add_argument(
+        "--cx", type=int, default=0,
+        help="Initial chunk X coordinate for viewer (compile-time define INIT_CX)"
+    )
+    parser.add_argument(
+        "--cz", type=int, default=0,
+        help="Initial chunk Z coordinate for viewer (compile-time define INIT_CZ)"
     )
     args = parser.parse_args()
 
@@ -79,7 +86,13 @@ def main() -> None:
     libs_dir = script_dir / "libs"
 
     emcc = locate_emcc()
+    # Compose base build command
     cmd = build_command(emcc, src_path, out_path, libs_dir)
+    # Inject initial chunk coordinates as compile-time defines
+    # build_command returns: [emcc, src, "-o", dst, ...]
+    # We insert after the dst
+    defines = [f"-DINIT_CX={args.cx}", f"-DINIT_CZ={args.cz}"]
+    cmd[4:4] = defines
 
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)
