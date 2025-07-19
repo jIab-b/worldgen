@@ -1,45 +1,64 @@
 #include "raylib.h"
+#include "raymath.h"
 #include <stdlib.h>
 #include <stdio.h>
 
 //------------------------------------------------------------------------------------
 // Program main entry point
 //------------------------------------------------------------------------------------
-// Add chunk dimensions and data pointers
-#define CHUNK_SIZE_X 128
-#define CHUNK_SIZE_Z 128
-#define MAX_HEIGHT    70  // adjust to your world’s max height
+// Mesh loader globals
+static float*    verts     = NULL;
+static unsigned int* inds   = NULL;
+static int       vCount    = 0;
+static int       iCount    = 0;
+static Mesh      mesh      = { 0 };
+static int       chunkX    = 0;
+static int       chunkZ    = 0;
+// Simple load error flag and message
+static bool      loadError = false;
+static char      errorMsg[128] = { 0 };
 
-static unsigned char *blocks = NULL;
-static unsigned char *colors = NULL;
-
-// Load raw chunk data for chunk (cx,cz)
-static void loadChunk(int cx, int cz)
+// Load mesh chunk from interleaved vertex/index binaries
+static void loadChunkMesh(int cx, int cz)
 {
-    if (blocks) UnloadFileData(blocks);
-    if (colors) UnloadFileData(colors);
-    char path1[64], path2[64];
-    snprintf(path1, sizeof(path1), "chunks/chunk_%d_%d.raw", cx, cz);
-    snprintf(path2, sizeof(path2), "chunks/chunk_%d_%d_color.raw", cx, cz);
-    int size1 = 0, size2 = 0;
-    blocks = LoadFileData(path1, &size1);
-    colors = LoadFileData(path2, &size2);
-}
+    // Reset any previous error
+    loadError = false;
+    // Unload previously uploaded mesh
+    if (mesh.vertexCount > 0) UnloadMesh(mesh);
+    // Free previous data
+    if (verts) UnloadFileData((unsigned char*)verts);
+    if (inds)  UnloadFileData((unsigned char*)inds);
 
-// Draw the loaded chunk
-static void drawChunk(void)
-{
-    if (!blocks || !colors) return;
-    for (int x = 0; x < CHUNK_SIZE_X; x++)
-    for (int z = 0; z < CHUNK_SIZE_Z; z++)
-    for (int y = 0; y < MAX_HEIGHT;    y++)
-    {
-        int idx = x*MAX_HEIGHT*CHUNK_SIZE_Z + y*CHUNK_SIZE_Z + z;
-        unsigned char b = blocks[idx];
-        if (b == 0) continue;  // air
-        Color col = { colors[idx*3+0], colors[idx*3+1], colors[idx*3+2], 255 };
-        DrawCube((Vector3){ (float)x, (float)y, (float)z }, 1,1,1, col);
+    unsigned int sizeV = 0;
+    unsigned char *blobV = LoadFileData(TextFormat("chunks/chunk_%d_%d_vertices.bin", cx, cz), &sizeV);
+    if (!blobV || sizeV == 0) {
+        loadError = true;
+        sprintf(errorMsg, "Error loading verts for chunk %d,%d", cx, cz);
+        return;
     }
+    vCount = sizeV / sizeof(float);
+    verts = (float*)blobV;
+
+    unsigned int sizeI = 0;
+    unsigned char *blobI = LoadFileData(TextFormat("chunks/chunk_%d_%d_indices.bin", cx, cz), &sizeI);
+    if (!blobI || sizeI == 0) {
+        loadError = true;
+        sprintf(errorMsg, "Error loading indices for chunk %d,%d", cx, cz);
+        return;
+    }
+    iCount = sizeI / sizeof(unsigned int);
+    inds = (unsigned int*)blobI;
+
+    mesh.vertexCount   = vCount/8;
+    mesh.triangleCount = iCount/3;
+    mesh.vertices      = verts;
+    mesh.normals       = verts + 3;
+    mesh.texcoords     = verts + 6;
+    mesh.indices       = (unsigned short*)inds;
+    UploadMesh(&mesh, false);
+
+    chunkX = cx;
+    chunkZ = cz;
 }
 
 int main(void)
@@ -49,64 +68,66 @@ int main(void)
     const int screenWidth = 800;
     const int screenHeight = 450;
 
-    InitWindow(screenWidth, screenHeight, "raylib [core] example - 3d camera free");
+    InitWindow(screenWidth, screenHeight, "raylib mesh viewer");
 
-    // Define the camera to look into our 3d world
     Camera3D camera = { 0 };
-    camera.position = (Vector3){ 10.0f, 10.0f, 10.0f }; // Camera position
-    camera.target = (Vector3){ 0.0f, 0.0f, 0.0f };      // Camera looking at point
-    camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };          // Camera up vector (rotation towards target)
-    camera.fovy = 45.0f;                                // Camera field-of-view Y
-    camera.projection = CAMERA_PERSPECTIVE;             // Camera projection type
+    camera.position = (Vector3){ 10.0f, 10.0f, 10.0f };
+    camera.target   = (Vector3){  0.0f,  0.0f,  0.0f };
+    camera.up       = (Vector3){  0.0f,  1.0f,  0.0f };
+    camera.fovy     = 45.0f;
+    camera.projection = CAMERA_PERSPECTIVE;
 
-    Vector3 cubePosition = { 0.0f, 0.0f, 0.0f };
-
-    DisableCursor();                    // Limit cursor to relative movement inside the window
-
-    SetTargetFPS(60);                   // Set our game to run at 60 frames-per-second
+    DisableCursor();
+    SetTargetFPS(60);
+    // Load default material for mesh rendering
+    Material material = LoadMaterialDefault();
     //--------------------------------------------------------------------------------------
 
-    // Load the initial chunk at (0,0)
-    loadChunk(0, 0);
+    // Load initial mesh chunk at (0,0)
+    loadChunkMesh(0, 0);
 
-    // Main game loop
-    while (!WindowShouldClose())        // Detect window close button or ESC key
+    // Main loop
+    while (!WindowShouldClose())
     {
-        // Update
-        //----------------------------------------------------------------------------------
-        UpdateCamera(&camera, CAMERA_FREE);
+        // Update camera (floating) with Shift×10 speed
+        int updates = (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) ? 10 : 1;
+        for (int i = 0; i < updates; i++) UpdateCamera(&camera, CAMERA_FREE);
 
-        if (IsKeyPressed('Z')) camera.target = (Vector3){ 0.0f, 0.0f, 0.0f };
-        //----------------------------------------------------------------------------------
+        // Chunk reload controls (arrow keys and R)
+        if (IsKeyPressed(KEY_UP))    loadChunkMesh(chunkX,     chunkZ + 1);
+        if (IsKeyPressed(KEY_DOWN))  loadChunkMesh(chunkX,     chunkZ - 1);
+        if (IsKeyPressed(KEY_RIGHT)) loadChunkMesh(chunkX + 1, chunkZ    );
+        if (IsKeyPressed(KEY_LEFT))  loadChunkMesh(chunkX - 1, chunkZ    );
+        if (IsKeyPressed(KEY_R))     loadChunkMesh(chunkX,     chunkZ    );
 
-        // Draw
-        //----------------------------------------------------------------------------------
+        // Draw scene (or error)
         BeginDrawing();
-
             ClearBackground(RAYWHITE);
+            if (loadError) {
+                DrawRectangle(10, 10, 340, 50, Fade(RED, 0.8f));
+                DrawText(errorMsg, 20, 20, 10, RED);
+                DrawText("Press R to retry", 20, 35, 10, RED);
+                EndDrawing();
+                continue;
+            }
 
-            // Draw our voxel chunk instead of a single cube
             BeginMode3D(camera);
-                drawChunk();
+                // Draw the mesh with default material
+                DrawMesh(mesh, material, MatrixIdentity());
                 DrawGrid(10, 1.0f);
             EndMode3D();
 
-            DrawRectangle( 10, 10, 320, 93, Fade(SKYBLUE, 0.5f));
-            DrawRectangleLines( 10, 10, 320, 93, BLUE);
-
-            DrawText("Free camera default controls:", 20, 20, 10, BLACK);
-            DrawText("- Mouse Wheel to Zoom in-out", 40, 40, 10, DARKGRAY);
-            DrawText("- Mouse Wheel Pressed to Pan", 40, 60, 10, DARKGRAY);
-            DrawText("- Z to zoom to (0, 0, 0)", 40, 80, 10, DARKGRAY);
+            // HUD overlay
+            DrawRectangle(10, 10, 260, 50, Fade(SKYBLUE, 0.5f));
+            DrawText(TextFormat("FPS: %03i  Chunk: %02i,%02i", GetFPS(), chunkX, chunkZ), 20, 20, 10, BLACK);
+            DrawText(TextFormat("Pos: %.2f,%.2f,%.2f", camera.position.x, camera.position.y, camera.position.z), 20, 35, 10, BLACK);
 
         EndDrawing();
-        //----------------------------------------------------------------------------------
     }
 
-    // De-Initialization
-    //--------------------------------------------------------------------------------------
-    CloseWindow();        // Close window and OpenGL context
-    //--------------------------------------------------------------------------------------
-
+    // De-initialization
+    UnloadMesh(mesh);
+    UnloadMaterial(material);
+    CloseWindow();
     return 0;
 }
