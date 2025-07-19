@@ -1,5 +1,6 @@
 #include "IO.hpp"
 #include <fstream>
+#include <cstdint>
 
 namespace terraingen {
 

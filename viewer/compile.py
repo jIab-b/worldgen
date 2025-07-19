@@ -72,6 +72,10 @@ def main() -> None:
     )
 
     script_dir = Path(__file__).parent.resolve()
+    # Ensure chunks directory exists for embedding
+    chunks_dir = script_dir / 'chunks'
+    if not chunks_dir.exists():
+        chunks_dir.mkdir()
     libs_dir = script_dir / "libs"
 
     emcc = locate_emcc()

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 #ifdef __EMSCRIPTEN__
 #include <webgpu/webgpu.h>
@@ -32,7 +33,13 @@ public:
     GPUContext();
     ~GPUContext();
 
-    bool HasDevice() const { return device_ != nullptr; }
+    bool HasDevice() const {
+#ifdef __EMSCRIPTEN__
+        return device_ != nullptr;
+#else
+        return false;
+#endif
+    }
 #ifdef __EMSCRIPTEN__
     WGPUQueue Queue() const { return queue_; }
 #endif
